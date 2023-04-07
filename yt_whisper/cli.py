@@ -6,7 +6,10 @@ import warnings
 import yt_dlp
 from .utils import slugify, str2bool, write_srt, write_vtt
 import tempfile
+import pathlib
+import torch
 
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 def main():
     parser = argparse.ArgumentParser(
@@ -31,7 +34,12 @@ def main():
 
     args = parser.parse_args().__dict__
     model_name: str = args.pop("model")
-    output_dir: str = args.pop("output_dir")
+    
+    output_dir: str = pathlib.Path(args.pop("output_dir"))
+    if not output_dir.is_dir():
+        print("output_dir {output_dir} is not a dir")
+        return
+    
     subtitles_format: str = args.pop("format")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -40,8 +48,9 @@ def main():
             f"{model_name} is an English-only model, forcing English detection.")
         args["language"] = "en"
 
-    model = whisper.load_model(model_name)
-    audios = get_audio(args.pop("video"))
+    model = whisper.load_model(model_name, device=DEVICE)
+    video_urls = args.pop("video")
+    audios = get_audio(video_urls)
     break_lines = args.pop("break_lines")
 
     for title, audio_path in audios.items():
@@ -50,17 +59,20 @@ def main():
         warnings.filterwarnings("default")
 
         if (subtitles_format == 'vtt'):
-            vtt_path = os.path.join(output_dir, f"{slugify(title)}.vtt")
-            with open(vtt_path, 'w', encoding="utf-8") as vtt:
+            file_path = output_dir.joinpath(f"{pathlib.Path(audio_path).stem}.vtt")
+        else:
+            file_path = output_dir.joinpath(f"{pathlib.Path(audio_path).stem}.srt")
+
+        if (subtitles_format == 'vtt'):
+            with open(file_path, 'w', encoding="utf-8") as vtt:
                 write_vtt(result["segments"], file=vtt, line_length=break_lines)
 
-            print("Saved VTT to", os.path.abspath(vtt_path))
+            print(f"Saved VTT to {file_path.resolve()}")
         else:
-            srt_path = os.path.join(output_dir, f"{slugify(title)}.srt")
-            with open(srt_path, 'w', encoding="utf-8") as srt:
+            with open(file_path, 'w', encoding="utf-8") as srt:
                 write_srt(result["segments"], file=srt, line_length=break_lines)
 
-            print("Saved SRT to", os.path.abspath(srt_path))
+            print(f"Saved SRT to {file_path.resolve()}")
 
 
 def get_audio(urls):
@@ -79,7 +91,7 @@ def get_audio(urls):
     for url in urls:
         result = ydl.extract_info(url, download=True)
         print(
-            f"Downloaded video \"{result['title']}\". Generating subtitles..."
+            f"Downloaded video \"{result['title'].encode('utf-8')}\". Generating subtitles..."
         )
         paths[result["title"]] = os.path.join(temp_dir, f"{result['id']}.mp3")
 
